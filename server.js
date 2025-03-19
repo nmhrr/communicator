@@ -9,17 +9,42 @@ const admin = require('firebase-admin');
 // Initialize Firebase Admin
 let db;
 try {
-  const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT || '{}');
-  if (!serviceAccount.project_id) {
-    throw new Error('Invalid Firebase service account configuration');
+  // Get the service account from environment variable
+  const serviceAccountString = process.env.FIREBASE_SERVICE_ACCOUNT;
+  if (!serviceAccountString) {
+    throw new Error('FIREBASE_SERVICE_ACCOUNT environment variable is not set');
   }
+
+  // Parse the service account JSON
+  let serviceAccount;
+  try {
+    serviceAccount = JSON.parse(serviceAccountString);
+  } catch (parseError) {
+    console.error('Failed to parse FIREBASE_SERVICE_ACCOUNT:', parseError);
+    throw new Error('Invalid FIREBASE_SERVICE_ACCOUNT JSON format');
+  }
+
+  // Validate required fields
+  const requiredFields = ['project_id', 'private_key', 'client_email'];
+  const missingFields = requiredFields.filter(field => !serviceAccount[field]);
+  if (missingFields.length > 0) {
+    throw new Error(`Missing required fields in service account: ${missingFields.join(', ')}`);
+  }
+
+  // Initialize Firebase Admin
   admin.initializeApp({
     credential: admin.credential.cert(serviceAccount)
   });
+
+  // Initialize Realtime Database
   db = admin.database();
+  console.log('Firebase initialized successfully');
 } catch (error) {
   console.error('Firebase initialization error:', error);
-  process.exit(1);
+  // Log the error but don't exit the process in production
+  if (process.env.NODE_ENV === 'development') {
+    process.exit(1);
+  }
 }
 
 const app = express();
@@ -35,8 +60,18 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('.'));
 
-// Helper function to get Firebase ref
-const getRef = (path) => db.ref(path);
+// Add a health check endpoint
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', firebase: !!db });
+});
+
+// Helper function to get Firebase ref with error handling
+const getRef = (path) => {
+  if (!db) {
+    throw new Error('Firebase database not initialized');
+  }
+  return db.ref(path);
+};
 
 // Socket.IO connection handling
 io.on('connection', (socket) => {
@@ -44,6 +79,11 @@ io.on('connection', (socket) => {
 
   // Handle user authentication
   socket.on('authenticate', async (data) => {
+    if (!db) {
+      socket.emit('auth_error', { message: 'Database not initialized' });
+      return;
+    }
+
     const { username, sessionId } = data;
     const userRef = getRef(`users/${username}`);
     
@@ -230,4 +270,5 @@ io.on('connection', (socket) => {
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  console.log(`Firebase status: ${db ? 'initialized' : 'not initialized'}`);
 }); 
