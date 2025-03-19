@@ -7,12 +7,21 @@ const bcrypt = require('bcrypt');
 const admin = require('firebase-admin');
 
 // Initialize Firebase Admin
-const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT || '{}');
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
-});
+let db;
+try {
+  const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT || '{}');
+  if (!serviceAccount.project_id) {
+    throw new Error('Invalid Firebase service account configuration');
+  }
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount)
+  });
+  db = admin.database();
+} catch (error) {
+  console.error('Firebase initialization error:', error);
+  process.exit(1);
+}
 
-const db = admin.database();
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {

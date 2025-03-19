@@ -15,5 +15,8 @@
             "src": "/(.*)",
             "dest": "server.js"
         }
-    ]
+    ],
+    "env": {
+        "FIREBASE_SERVICE_ACCOUNT": "@firebase_service_account"
+    }
 } 
