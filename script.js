@@ -96,21 +96,35 @@ const streams = [
 function createPostElement(post) {
     const postElement = document.createElement('div');
     postElement.className = 'post';
+    postElement.dataset.id = post.id;
+
+    let content = post.content;
+    // Replace mentions with links
+    content = content.replace(/@(\w+)/g, '<a href="#" class="mention">@$1</a>');
+    // Replace GIF tags with actual GIFs
+    content = content.replace(/\[GIF\](.*?)\[\/GIF\]/g, '<img src="$1" class="post-gif" alt="GIF">');
+
     postElement.innerHTML = `
         <div class="post-header">
-            <img src="placeholder-avatar.png" alt="User avatar" class="post-avatar">
-            <div class="post-meta">
-                <span class="post-username">${post.username}</span>
-                <span class="post-time">${post.timeAgo}</span>
-            </div>
+            <img src="${post.profile_picture}" alt="${post.username}" class="avatar">
+            <span class="username">${post.username}</span>
+            <span class="time">${post.timeAgo}</span>
         </div>
-        <div class="post-content">${post.content}</div>
+        <div class="post-content">${content}</div>
+        ${post.imageUrl ? `<img src="${post.imageUrl}" class="post-image" alt="Post image">` : ''}
+        ${post.pollId ? createPollElement(post) : ''}
         <div class="post-actions">
-            <button class="like-btn">❤️ ${post.likes}</button>
-            <button class="comment-btn">💬 ${post.comments}</button>
-            <button class="more-btn">⋯</button>
+            <button class="like-btn">❤️ ${post.likes_count || 0}</button>
+            <button class="comment-btn">💬 ${post.comments_count || 0}</button>
+            <button class="share-btn">🔄</button>
         </div>
     `;
+
+    // Add event listeners
+    postElement.querySelector('.like-btn').addEventListener('click', () => {
+        socket.emit('like_post', post.id);
+    });
+
     return postElement;
 }
 
@@ -174,54 +188,128 @@ const socket = io(window.location.origin);
 // Authentication handling
 let currentUser = null;
 
-function showAuthPrompt() {
-    const authHtml = `
-        <div class="auth-overlay">
-            <div class="auth-modal">
-                <h2>Welcome to Communicator</h2>
-                <div class="auth-options">
-                    <div class="auth-option">
-                        <h3>Have a session ID?</h3>
-                        <input type="text" id="session-id" placeholder="Enter your 16-digit session ID">
-                        <button onclick="loginWithSession()">Login</button>
+// DOM Elements
+const postComposer = document.querySelector('.post-composer');
+const postTextarea = postComposer.querySelector('textarea');
+const characterCount = postComposer.querySelector('.character-count');
+const pollForm = postComposer.querySelector('.poll-form');
+const gifForm = postComposer.querySelector('.gif-form');
+const pollOptions = pollForm.querySelector('.poll-options');
+const addOptionBtn = pollForm.querySelector('.add-option-btn');
+const createPollBtn = pollForm.querySelector('.create-poll-btn');
+const gifSearch = gifForm.querySelector('.gif-search');
+const gifResults = gifForm.querySelector('.gif-results');
+
+// Character count update
+postTextarea.addEventListener('input', () => {
+    const remaining = 140 - postTextarea.value.length;
+    characterCount.textContent = remaining;
+    characterCount.style.color = remaining < 20 ? 'red' : 'inherit';
+});
+
+// Poll form handling
+document.querySelector('.poll-btn').addEventListener('click', () => {
+    pollForm.style.display = 'block';
+    gifForm.style.display = 'none';
+});
+
+addOptionBtn.addEventListener('click', () => {
+    if (pollOptions.children.length < 4) {
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'poll-option';
+        input.placeholder = `Option ${pollOptions.children.length + 1}`;
+        pollOptions.appendChild(input);
+    }
+});
+
+createPollBtn.addEventListener('click', () => {
+    const question = pollForm.querySelector('.poll-question').value.trim();
+    const options = Array.from(pollOptions.querySelectorAll('input'))
+        .map(input => input.value.trim())
+        .filter(option => option !== '');
+
+    if (question && options.length >= 2) {
+        socket.emit('create_poll', {
+            question,
+            options
+        });
+        pollForm.style.display = 'none';
+        pollForm.querySelector('.poll-question').value = '';
+        pollOptions.innerHTML = `
+            <input type="text" class="poll-option" placeholder="Option 1">
+            <input type="text" class="poll-option" placeholder="Option 2">
+        `;
+    }
+});
+
+// GIF form handling
+document.querySelector('.gif-btn').addEventListener('click', () => {
+    gifForm.style.display = 'block';
+    pollForm.style.display = 'none';
+});
+
+let gifSearchTimeout;
+gifSearch.addEventListener('input', () => {
+    clearTimeout(gifSearchTimeout);
+    gifSearchTimeout = setTimeout(() => {
+        const query = gifSearch.value.trim();
+        if (query) {
+            // Using GIPHY API (you'll need to add your API key)
+            fetch(`https://api.giphy.com/v1/gifs/search?api_key=YOUR_GIPHY_API_KEY&q=${encodeURIComponent(query)}&limit=10`)
+                .then(response => response.json())
+                .then(data => {
+                    gifResults.innerHTML = data.data.map(gif => `
+                        <div class="gif-item" data-url="${gif.images.fixed_height.url}">
+                            <img src="${gif.images.fixed_height_small.url}" alt="${gif.title}">
+                        </div>
+                    `).join('');
+                });
+        } else {
+            gifResults.innerHTML = '';
+        }
+    }, 500);
+});
+
+gifResults.addEventListener('click', (e) => {
+    const gifItem = e.target.closest('.gif-item');
+    if (gifItem) {
+        const gifUrl = gifItem.dataset.url;
+        postTextarea.value += `\n[GIF]${gifUrl}[/GIF]\n`;
+        gifForm.style.display = 'none';
+        gifSearch.value = '';
+        gifResults.innerHTML = '';
+    }
+});
+
+// Post handling
+document.querySelector('.post-btn').addEventListener('click', () => {
+    const content = postTextarea.value.trim();
+    if (content) {
+        socket.emit('new_post', { content });
+        postTextarea.value = '';
+        characterCount.textContent = '140';
+    }
+});
+
+// Create poll element
+function createPollElement(post) {
+    return `
+        <div class="poll" data-poll-id="${post.pollId}">
+            <div class="poll-question">${post.content}</div>
+            <div class="poll-options">
+                ${post.pollOptions.map((option, index) => `
+                    <div class="poll-option" data-option-id="${option.id}">
+                        <div class="option-text">${option.text}</div>
+                        <div class="option-bar">
+                            <div class="option-fill" style="width: ${(option.votes / post.pollOptions.reduce((sum, opt) => sum + opt.votes, 0)) * 100}%"></div>
+                        </div>
+                        <div class="option-votes">${option.votes} votes</div>
                     </div>
-                    <div class="auth-separator">or</div>
-                    <div class="auth-option">
-                        <h3>Create new account</h3>
-                        <input type="text" id="new-username" placeholder="Choose a username">
-                        <input type="text" id="profile-picture" placeholder="Profile picture URL (optional)">
-                        <button onclick="createNewAccount()">Create Account</button>
-                    </div>
-                </div>
+                `).join('')}
             </div>
         </div>
     `;
-    document.body.insertAdjacentHTML('beforeend', authHtml);
-}
-
-function loginWithSession() {
-    const sessionId = document.getElementById('session-id').value.trim();
-    if (sessionId.length !== 16 || !/^\d+$/.test(sessionId)) {
-        alert('Please enter a valid 16-digit session ID');
-        return;
-    }
-    socket.emit('auth', { type: 'session', sessionId });
-}
-
-function createNewAccount() {
-    const username = document.getElementById('new-username').value.trim();
-    const profilePicture = document.getElementById('profile-picture').value.trim();
-    
-    if (!username) {
-        alert('Please enter a username');
-        return;
-    }
-    
-    socket.emit('auth', {
-        type: 'new',
-        username,
-        profilePicture: profilePicture || null
-    });
 }
 
 // Socket event handlers
@@ -264,33 +352,38 @@ socket.on('new_post', (post) => {
     postsFeed.insertBefore(postElement, postsFeed.firstChild);
 });
 
-socket.on('post_liked', (data) => {
-    const postElement = document.querySelector(`[data-post-id="${data.postId}"]`);
-    if (postElement) {
-        const likeCount = postElement.querySelector('.like-count');
-        likeCount.textContent = parseInt(likeCount.textContent) + 1;
+socket.on('post_liked', ({ postId, userId }) => {
+    const post = document.querySelector(`.post[data-id="${postId}"]`);
+    if (post) {
+        const likeBtn = post.querySelector('.like-btn');
+        const currentLikes = parseInt(likeBtn.textContent.split(' ')[1]) || 0;
+        likeBtn.textContent = `❤️ ${currentLikes + 1}`;
     }
 });
 
 socket.on('new_comment', (comment) => {
-    const postElement = document.querySelector(`[data-post-id="${comment.postId}"]`);
-    if (postElement) {
-        const commentCount = postElement.querySelector('.comment-count');
-        commentCount.textContent = parseInt(commentCount.textContent) + 1;
+    const post = document.querySelector(`.post[data-id="${comment.postId}"]`);
+    if (post) {
+        const commentBtn = post.querySelector('.comment-btn');
+        const currentComments = parseInt(commentBtn.textContent.split(' ')[1]) || 0;
+        commentBtn.textContent = `💬 ${currentComments + 1}`;
     }
 });
 
-socket.on('new_message', (message) => {
-    // Show notification for new message
-    const notification = document.createElement('div');
-    notification.className = 'message-notification';
-    notification.textContent = `New message from ${message.senderUsername}`;
-    document.body.appendChild(notification);
-    setTimeout(() => notification.remove(), 3000);
-
-    // Update message count in nav
-    const messageCount = document.querySelector('.message-count');
-    messageCount.textContent = parseInt(messageCount.textContent) + 1;
+socket.on('poll_updated', ({ pollId, options }) => {
+    const poll = document.querySelector(`.poll[data-poll-id="${pollId}"]`);
+    if (poll) {
+        const totalVotes = options.reduce((sum, opt) => sum + opt.votes, 0);
+        options.forEach(option => {
+            const optionElement = poll.querySelector(`.poll-option[data-option-id="${option.id}"]`);
+            if (optionElement) {
+                optionElement.querySelector('.option-fill').style.width = 
+                    `${(option.votes / totalVotes) * 100}%`;
+                optionElement.querySelector('.option-votes').textContent = 
+                    `${option.votes} votes`;
+            }
+        });
+    }
 });
 
 // Post creation and interaction handlers
@@ -343,4 +436,54 @@ document.querySelector('.posts-feed').addEventListener('click', (e) => {
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
     showAuthPrompt();
-}); 
+});
+
+function showAuthPrompt() {
+    const authHtml = `
+        <div class="auth-overlay">
+            <div class="auth-modal">
+                <h2>Welcome to Communicator</h2>
+                <div class="auth-options">
+                    <div class="auth-option">
+                        <h3>Have a session ID?</h3>
+                        <input type="text" id="session-id" placeholder="Enter your 16-digit session ID">
+                        <button onclick="loginWithSession()">Login</button>
+                    </div>
+                    <div class="auth-separator">or</div>
+                    <div class="auth-option">
+                        <h3>Create new account</h3>
+                        <input type="text" id="new-username" placeholder="Choose a username">
+                        <input type="text" id="profile-picture" placeholder="Profile picture URL (optional)">
+                        <button onclick="createNewAccount()">Create Account</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+    document.body.insertAdjacentHTML('beforeend', authHtml);
+}
+
+function loginWithSession() {
+    const sessionId = document.getElementById('session-id').value.trim();
+    if (sessionId.length !== 16 || !/^\d+$/.test(sessionId)) {
+        alert('Please enter a valid 16-digit session ID');
+        return;
+    }
+    socket.emit('auth', { type: 'session', sessionId });
+}
+
+function createNewAccount() {
+    const username = document.getElementById('new-username').value.trim();
+    const profilePicture = document.getElementById('profile-picture').value.trim();
+    
+    if (!username) {
+        alert('Please enter a username');
+        return;
+    }
+    
+    socket.emit('auth', {
+        type: 'new',
+        username,
+        profilePicture: profilePicture || null
+    });
+} 

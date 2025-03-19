@@ -35,9 +35,20 @@ db.serialize(() => {
         user_id TEXT,
         content TEXT,
         image_url TEXT,
+        gif_url TEXT,
         poll_id TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(user_id) REFERENCES users(id)
+    )`);
+
+    // Mentions table
+    db.run(`CREATE TABLE IF NOT EXISTS mentions (
+        post_id TEXT,
+        mentioned_user_id TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY(post_id, mentioned_user_id),
+        FOREIGN KEY(post_id) REFERENCES posts(id),
+        FOREIGN KEY(mentioned_user_id) REFERENCES users(id)
     )`);
 
     // Likes table
@@ -84,6 +95,7 @@ db.serialize(() => {
         id TEXT PRIMARY KEY,
         poll_id TEXT,
         option_text TEXT,
+        votes INTEGER DEFAULT 0,
         FOREIGN KEY(poll_id) REFERENCES polls(id)
     )`);
 
@@ -108,6 +120,13 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Connected users map
 const connectedUsers = new Map();
 
+// Helper function to extract mentions from content
+function extractMentions(content) {
+    const mentionRegex = /@(\w+)/g;
+    const mentions = content.match(mentionRegex) || [];
+    return mentions.map(mention => mention.slice(1)); // Remove @ symbol
+}
+
 // WebSocket connection handling
 io.on('connection', (socket) => {
     console.log('New client connected');
@@ -128,7 +147,7 @@ io.on('connection', (socket) => {
                 // Create new account
                 const sessionId = generateSessionId();
                 const username = data.username;
-                const profilePicture = data.profilePicture || 'placeholder-avatar.svg';
+                const profilePicture = data.profilePicture || 'https://api.dicebear.com/7.x/avataaars/svg?seed=' + username;
 
                 db.run('INSERT INTO users (id, username, profile_picture) VALUES (?, ?, ?)',
                     [sessionId, username, profilePicture],
@@ -157,22 +176,112 @@ io.on('connection', (socket) => {
         }
 
         const postId = uuidv4();
-        db.run('INSERT INTO posts (id, user_id, content, image_url) VALUES (?, ?, ?, ?)',
-            [postId, user.id, data.content, data.imageUrl || null],
+        const mentions = extractMentions(data.content);
+
+        db.run('INSERT INTO posts (id, user_id, content, image_url, gif_url) VALUES (?, ?, ?, ?, ?)',
+            [postId, user.id, data.content, data.imageUrl || null, data.gifUrl || null],
             (err) => {
                 if (err) {
                     socket.emit('post_error', { message: 'Failed to create post' });
                 } else {
+                    // Handle mentions
+                    if (mentions.length > 0) {
+                        mentions.forEach(mentionedUsername => {
+                            db.get('SELECT id FROM users WHERE username = ?', [mentionedUsername], (err, mentionedUser) => {
+                                if (!err && mentionedUser) {
+                                    db.run('INSERT INTO mentions (post_id, mentioned_user_id) VALUES (?, ?)',
+                                        [postId, mentionedUser.id]);
+                                }
+                            });
+                        });
+                    }
+
                     const post = {
                         id: postId,
                         username: user.username,
                         content: data.content,
                         imageUrl: data.imageUrl,
+                        gifUrl: data.gifUrl,
                         likes: 0,
                         comments: 0,
                         timeAgo: 'just now'
                     };
                     io.emit('new_post', post);
+                }
+            }
+        );
+    });
+
+    // Handle poll creation
+    socket.on('create_poll', async (data) => {
+        const user = connectedUsers.get(socket.id);
+        if (!user) return;
+
+        const pollId = uuidv4();
+        const postId = uuidv4();
+
+        db.run('INSERT INTO polls (id, question) VALUES (?, ?)',
+            [pollId, data.question],
+            (err) => {
+                if (err) {
+                    socket.emit('poll_error', { message: 'Failed to create poll' });
+                } else {
+                    // Insert poll options
+                    data.options.forEach(option => {
+                        const optionId = uuidv4();
+                        db.run('INSERT INTO poll_options (id, poll_id, option_text) VALUES (?, ?, ?)',
+                            [optionId, pollId, option]);
+                    });
+
+                    // Create post with poll
+                    db.run('INSERT INTO posts (id, user_id, content, poll_id) VALUES (?, ?, ?, ?)',
+                        [postId, user.id, data.question, pollId],
+                        (err) => {
+                            if (!err) {
+                                const post = {
+                                    id: postId,
+                                    username: user.username,
+                                    content: data.question,
+                                    pollId: pollId,
+                                    options: data.options,
+                                    votes: data.options.map(() => 0),
+                                    likes: 0,
+                                    comments: 0,
+                                    timeAgo: 'just now'
+                                };
+                                io.emit('new_post', post);
+                            }
+                        }
+                    );
+                }
+            }
+        );
+    });
+
+    // Handle poll vote
+    socket.on('vote_poll', async (data) => {
+        const user = connectedUsers.get(socket.id);
+        if (!user) return;
+
+        db.run('INSERT OR IGNORE INTO poll_votes (poll_id, option_id, user_id) VALUES (?, ?, ?)',
+            [data.pollId, data.optionId, user.id],
+            (err) => {
+                if (!err) {
+                    // Update vote count
+                    db.run('UPDATE poll_options SET votes = votes + 1 WHERE id = ?',
+                        [data.optionId]);
+                    
+                    // Get updated poll data
+                    db.all('SELECT * FROM poll_options WHERE poll_id = ?', [data.pollId],
+                        (err, options) => {
+                            if (!err) {
+                                io.emit('poll_updated', {
+                                    pollId: data.pollId,
+                                    options: options
+                                });
+                            }
+                        }
+                    );
                 }
             }
         );
@@ -269,18 +378,40 @@ function handleSuccessfulAuth(socket, user) {
 }
 
 function sendInitialData(socket, user) {
-    // Send recent posts
+    // Send recent posts with all details
     db.all(`
-        SELECT p.*, u.username, u.profile_picture,
+        SELECT 
+            p.*, 
+            u.username, 
+            u.profile_picture,
             (SELECT COUNT(*) FROM likes WHERE post_id = p.id) as likes_count,
-            (SELECT COUNT(*) FROM comments WHERE post_id = p.id) as comments_count
+            (SELECT COUNT(*) FROM comments WHERE post_id = p.id) as comments_count,
+            CASE 
+                WHEN p.poll_id IS NOT NULL THEN (
+                    SELECT json_group_array(
+                        json_object(
+                            'id', po.id,
+                            'text', po.option_text,
+                            'votes', po.votes
+                        )
+                    )
+                    FROM poll_options po
+                    WHERE po.poll_id = p.poll_id
+                )
+                ELSE NULL
+            END as poll_options
         FROM posts p
         JOIN users u ON p.user_id = u.id
         ORDER BY p.created_at DESC
         LIMIT 50
     `, [], (err, posts) => {
         if (!err) {
-            socket.emit('initial_posts', posts);
+            // Process posts to include poll data
+            const processedPosts = posts.map(post => ({
+                ...post,
+                pollOptions: post.poll_options ? JSON.parse(post.poll_options) : null
+            }));
+            socket.emit('initial_posts', processedPosts);
         }
     });
 

@@ -78,14 +78,32 @@
         <!-- Main Content -->
         <main class="content">
             <div class="post-composer">
-                <textarea placeholder="what's on your mind?"></textarea>
+                <textarea placeholder="what's on your mind?" maxlength="140"></textarea>
                 <div class="composer-actions">
                     <div class="action-buttons">
                         <button class="stats-btn">📊</button>
                         <button class="emoji-btn">😊</button>
                         <button class="image-btn">🖼️</button>
+                        <button class="gif-btn">🎬</button>
+                        <button class="poll-btn">📊</button>
                     </div>
+                    <div class="character-count">140</div>
                     <button class="post-btn">post</button>
+                </div>
+                <!-- Poll creation form (hidden by default) -->
+                <div class="poll-form" style="display: none;">
+                    <input type="text" class="poll-question" placeholder="Ask a question...">
+                    <div class="poll-options">
+                        <input type="text" class="poll-option" placeholder="Option 1">
+                        <input type="text" class="poll-option" placeholder="Option 2">
+                    </div>
+                    <button class="add-option-btn">+ Add option</button>
+                    <button class="create-poll-btn">Create poll</button>
+                </div>
+                <!-- GIF search form (hidden by default) -->
+                <div class="gif-form" style="display: none;">
+                    <input type="text" class="gif-search" placeholder="Search GIFs...">
+                    <div class="gif-results"></div>
                 </div>
             </div>
 
