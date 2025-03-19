@@ -9,36 +9,41 @@ const admin = require('firebase-admin');
 // Initialize Firebase Admin
 let db;
 try {
-  // Get the service account from environment variable
-  const serviceAccountString = process.env.FIREBASE_SERVICE_ACCOUNT;
-  if (!serviceAccountString) {
-    throw new Error('FIREBASE_SERVICE_ACCOUNT environment variable is not set');
-  }
+  // Check if Firebase is already initialized
+  if (!admin.apps.length) {
+    // Get the service account from environment variable
+    const serviceAccountString = process.env.FIREBASE_SERVICE_ACCOUNT;
+    if (!serviceAccountString) {
+      throw new Error('FIREBASE_SERVICE_ACCOUNT environment variable is not set');
+    }
 
-  // Parse the service account JSON
-  let serviceAccount;
-  try {
-    serviceAccount = JSON.parse(serviceAccountString);
-  } catch (parseError) {
-    console.error('Failed to parse FIREBASE_SERVICE_ACCOUNT:', parseError);
-    throw new Error('Invalid FIREBASE_SERVICE_ACCOUNT JSON format');
-  }
+    // Parse the service account JSON
+    let serviceAccount;
+    try {
+      serviceAccount = JSON.parse(serviceAccountString);
+    } catch (parseError) {
+      console.error('Failed to parse FIREBASE_SERVICE_ACCOUNT:', parseError);
+      throw new Error('Invalid FIREBASE_SERVICE_ACCOUNT JSON format');
+    }
 
-  // Validate required fields
-  const requiredFields = ['project_id', 'private_key', 'client_email'];
-  const missingFields = requiredFields.filter(field => !serviceAccount[field]);
-  if (missingFields.length > 0) {
-    throw new Error(`Missing required fields in service account: ${missingFields.join(', ')}`);
-  }
+    // Validate required fields
+    const requiredFields = ['project_id', 'private_key', 'client_email'];
+    const missingFields = requiredFields.filter(field => !serviceAccount[field]);
+    if (missingFields.length > 0) {
+      throw new Error(`Missing required fields in service account: ${missingFields.join(', ')}`);
+    }
 
-  // Initialize Firebase Admin
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount)
-  });
+    // Initialize Firebase Admin
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount)
+    });
+    console.log('Firebase initialized successfully');
+  } else {
+    console.log('Firebase already initialized');
+  }
 
   // Initialize Realtime Database
   db = admin.database();
-  console.log('Firebase initialized successfully');
 } catch (error) {
   console.error('Firebase initialization error:', error);
   // Log the error but don't exit the process in production
