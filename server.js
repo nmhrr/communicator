@@ -9,8 +9,11 @@ const admin = require('firebase-admin');
 // Initialize Firebase Admin
 let db;
 try {
-  // Check if Firebase is already initialized
-  if (!admin.apps.length) {
+  // Generate a unique app name based on timestamp and random string
+  const appName = `app-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+  
+  // Check if Firebase is already initialized with this app name
+  if (!admin.apps.find(app => app.name === appName)) {
     // Get the service account from environment variable
     const serviceAccountString = process.env.FIREBASE_SERVICE_ACCOUNT;
     if (!serviceAccountString) {
@@ -33,17 +36,17 @@ try {
       throw new Error(`Missing required fields in service account: ${missingFields.join(', ')}`);
     }
 
-    // Initialize Firebase Admin
+    // Initialize Firebase Admin with unique app name
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount)
-    });
-    console.log('Firebase initialized successfully');
+    }, appName);
+    console.log(`Firebase initialized successfully with app name: ${appName}`);
   } else {
-    console.log('Firebase already initialized');
+    console.log(`Firebase already initialized with app name: ${appName}`);
   }
 
-  // Initialize Realtime Database
-  db = admin.database();
+  // Initialize Realtime Database using the named app
+  db = admin.app(appName).database();
 } catch (error) {
   console.error('Firebase initialization error:', error);
   // Log the error but don't exit the process in production
